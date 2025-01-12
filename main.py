@@ -3,9 +3,11 @@ from openai import OpenAI
 import turbopuffer as tpuf
 import os
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from dotenv import load_dotenv
 from typing import Dict, List, Optional, Any
+from pydantic import BaseModel, Field
+from decimal import Decimal
 
 load_dotenv()
 
@@ -16,7 +18,19 @@ tpuf.api_base_url = "https://gcp-us-central1.turbopuffer.com"
 # Set up the Streamlit App
 st.title("AI Customer Support Agent with Memory 🛒")
 st.caption("Chat with a customer support assistant who remembers your past interactions.")
-    
+
+
+# Simplified Pydantic model without nesting
+class CustomerData(BaseModel):
+    customer_id: str = Field(..., description="Unique customer identifier")
+    name: str = Field(..., description="Customer's full name")
+    email: str = Field(..., description="Customer's email")
+    shipping_address: str = Field(..., description="Full shipping address as string")
+    recent_order: dict = Field(..., description="Most recent order details")
+    previous_orders: list = Field(default_factory=list, description="List of previous orders")
+    interactions: list = Field(default_factory=list, description="Customer service interactions")
+    preferences: dict = Field(default_factory=dict, description="Customer preferences")
+
 class CustomerSupportAIAgent:
     def __init__(self):
         """Initialize the customer support agent with TurboPuffer."""
@@ -113,26 +127,26 @@ class CustomerSupportAIAgent:
         expected_delivery = (today + timedelta(days=2)).strftime("%B %d, %Y")
         
         prompt = f"""Generate a detailed customer profile and order history for a TechGadgets.com customer with ID {user_id}. Include:
-            1. Customer name and basic info
-            2. A recent order of a high-end electronic device (placed on {order_date}, to be delivered by {expected_delivery})
-            3. Order details (product, price, order number)
+            1. Customer id being used is {user_id}
+            2. Customer name
+            3. Customer email
             4. Customer's shipping address
-            5. 2-3 previous orders from the past year
-            6. 2-3 customer service interactions related to these orders
-            7. Any preferences or patterns in their shopping behavior
-
-            Format the output as a JSON object."""
+            5. A recent order of a high-end electronic device (placed on {order_date}, to be delivered by {expected_delivery})
+            6. Order details (product, price, order number)
+            7. 2-3 previous orders from the past year
+            8. 2-3 customer service interactions related to these orders
+            9. Any preferences or patterns in their shopping behavior"""
             
-        response = self.client.chat.completions.create(
-            model="gemini-1.5-flash-latest",
+        response = self.client.beta.chat.completions.parse(
+            model="gemini-1.5-",
             messages=[
-                {"role": "system", "content": "You are a data generation AI that creates realistic customer profiles and order hitories. Always respond with a valid JSON object."},
+                {"role": "system", "content": "You are a data generation AI that creates realistic customer profiles and order hitories"},
                 {"role": "user", "content": prompt}
             ],
-            response_format={"type": "json_object"}
+            response_format=CustomerData
         )
-        
-        customer_data = json.loads(response.choices[0].message.content)
+                
+        customer_data = response.choices[0].message.parsed
         
         print("customer_data", customer_data)
         
@@ -140,7 +154,7 @@ class CustomerSupportAIAgent:
             ids=[f"{user_id}-{datetime.now().timestamp()}"],
             vectors=[self.get_embeddings(customer_data)],
             distance_metric="cosine_distance",
-            attributes={"customer_data": customer_data, 
+            attributes={"customer_data": [customer_data], 
                         "user_id": user_id, 
                         "role": "assistant", 
                         "timestamp": datetime.now().timestamp(),
