@@ -1,18 +1,17 @@
 import streamlit as st
-from openai import OpenAI
 import turbopuffer as tpuf
 import os
-import json
 from datetime import datetime, timedelta, date
 from dotenv import load_dotenv
-from typing import Dict, List, Optional, Any
-from pydantic import BaseModel, Field
-from decimal import Decimal
+from typing import Dict, List, Optional, Any, Iterable
+from pydantic import BaseModel
+import instructor
+import google.generativeai as genai
+
 
 load_dotenv()
 
 tpuf.api_key = os.getenv("TURBOPUFFER_API_KEY")
-print(tpuf.api_key)
 tpuf.api_base_url = "https://gcp-us-central1.turbopuffer.com"
 
 # Set up the Streamlit App
@@ -20,16 +19,48 @@ st.title("AI Customer Support Agent with Memory 🛒")
 st.caption("Chat with a customer support assistant who remembers your past interactions.")
 
 
-# Simplified Pydantic model without nesting
+class ShippingAddress(BaseModel):
+    street: str
+    city: str
+    state: str
+    zip: str
+
+class Preferences(BaseModel):
+    payment: str
+    delivery: str
+    communication: str
+
+class CustomerProfile(BaseModel):
+    customerId: str
+    name: str
+    email: str
+    phone: str
+    dob: str
+    shippingAddress: ShippingAddress
+    preferences: Preferences
+
+class Product(BaseModel):
+    productName: str
+    price: float
+    quantity: int
+
+class Order(BaseModel):
+    orderId: str
+    orderDate: date
+    deliveryDate: date
+    products: List[Product]
+    status: str
+
+class CustomerServiceInteraction(BaseModel):
+    interactionId: str
+    orderId: str
+    date: date
+    description: str
+
 class CustomerData(BaseModel):
-    customer_id: str = Field(..., description="Unique customer identifier")
-    name: str = Field(..., description="Customer's full name")
-    email: str = Field(..., description="Customer's email")
-    shipping_address: str = Field(..., description="Full shipping address as string")
-    recent_order: dict = Field(..., description="Most recent order details")
-    previous_orders: list = Field(default_factory=list, description="List of previous orders")
-    interactions: list = Field(default_factory=list, description="Customer service interactions")
-    preferences: dict = Field(default_factory=dict, description="Customer preferences")
+    customerProfile: CustomerProfile
+    orderHistory: List[Order]
+    customerServiceInteractions: List[CustomerServiceInteraction]
 
 class CustomerSupportAIAgent:
     def __init__(self):
@@ -39,8 +70,11 @@ class CustomerSupportAIAgent:
         # Create namespaces
         self.ns = tpuf.Namespace('customer-support-agent')
         
-        self.client = OpenAI(api_key=os.getenv('GEMINI_API_KEY'), base_url=os.getenv('GEMINI_BASE_URL'))
-        
+        self.client = instructor.from_gemini(
+            client=genai.GenerativeModel(
+                model_name="models/gemini-1.5-flash-latest",
+            )
+        )
 
     def handle_query(self, query: str, user_id: Optional[str] = None) -> str:
         """Handle a customer query by searching relevant memories and generating a response."""
@@ -109,7 +143,6 @@ class CustomerSupportAIAgent:
         
         return response.data[0].embedding
 
-
     def get_memories(self, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """Retrieve all memories for a given user."""
         memories = self.chat_history.query(
@@ -120,33 +153,24 @@ class CustomerSupportAIAgent:
         
         return [memory.attributes for memory in memories]
     
-    def generate_synthetic_data(self, user_id: Optional[str] = None) -> Dict[str, Any]:
+    def generate_synthetic_data(self, user_id: Optional[str] = None):
         """Generate synthetic customer data for a given user."""
         today = datetime.now()
         order_date = (today - timedelta(days=10)).strftime("%B %d, %Y")
         expected_delivery = (today + timedelta(days=2)).strftime("%B %d, %Y")
         
-        prompt = f"""Generate a detailed customer profile and order history for a TechGadgets.com customer with ID {user_id}. Include:
-            1. Customer id being used is {user_id}
-            2. Customer name
-            3. Customer email
-            4. Customer's shipping address
-            5. A recent order of a high-end electronic device (placed on {order_date}, to be delivered by {expected_delivery})
-            6. Order details (product, price, order number)
-            7. 2-3 previous orders from the past year
-            8. 2-3 customer service interactions related to these orders
-            9. Any preferences or patterns in their shopping behavior"""
+        prompt = f"""Generate a detailed customer profile and order history for a TechGadgets.com customer with ID {user_id}.
+            When generating the recent order, make it a high-end electronic device (placed on {order_date}, to be delivered by {expected_delivery})"""
             
-        response = self.client.beta.chat.completions.parse(
-            model="gemini-1.5-",
+        customer_data = self.client.chat.completions.create(
             messages=[
                 {"role": "system", "content": "You are a data generation AI that creates realistic customer profiles and order hitories"},
                 {"role": "user", "content": prompt}
             ],
-            response_format=CustomerData
+            response_model=CustomerData
         )
                 
-        customer_data = response.choices[0].message.parsed
+        #customer_data = response.choices[0].message.parsed
         
         print("customer_data", customer_data)
         
