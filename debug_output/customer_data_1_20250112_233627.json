@@ -1,0 +1,43 @@
+{
+  "customerProfile": {
+    "customerId": "1",
+    "name": "Alex Johnson",
+    "email": "alex.johnson@example.com",
+    "phone": "555-123-4567",
+    "dob": "1990-05-15",
+    "shippingAddress": {
+      "street": "123 Tech Lane",
+      "city": "Silicon Valley",
+      "state": "CA",
+      "zip": "94043"
+    },
+    "preferences": {
+      "payment": "Credit Card",
+      "delivery": "Standard",
+      "communication": "Email"
+    }
+  },
+  "orderHistory": [
+    {
+      "orderId": "ORD001",
+      "orderDate": "2025-01-02",
+      "deliveryDate": "2025-01-14",
+      "products": [
+        {
+          "productName": "Premium 4K Ultra HD Smart TV",
+          "price": 1999.99,
+          "quantity": 1
+        }
+      ],
+      "status": "Delivered"
+    }
+  ],
+  "customerServiceInteractions": [
+    {
+      "interactionId": "CSI001",
+      "orderId": "ORD001",
+      "date": "2025-01-03",
+      "description": "Inquiry about the delivery status of the order."
+    }
+  ]
+}

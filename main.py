@@ -1,14 +1,13 @@
 import streamlit as st
 import turbopuffer as tpuf
 import os
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from typing import Dict, List, Optional, Any, Iterable
-from pydantic import BaseModel
+from typing import Dict, List, Optional, Any
+from pydantic import BaseModel, ConfigDict, Field
 import instructor
-import google.generativeai as genai
-
-
+from openai import OpenAI
+import json
 load_dotenv()
 
 tpuf.api_key = os.getenv("TURBOPUFFER_API_KEY")
@@ -46,15 +45,24 @@ class Product(BaseModel):
 
 class Order(BaseModel):
     orderId: str
-    orderDate: date
-    deliveryDate: date
+    orderDate: str = Field(
+        pattern=r'^\d{4}-\d{2}-\d{2}$',  # YYYY-MM-DD format
+        examples=['2024-03-20']
+    )
+    deliveryDate: str = Field(
+        pattern=r'^\d{4}-\d{2}-\d{2}$',  # YYYY-MM-DD format
+        examples=['2024-03-20']
+    )
     products: List[Product]
     status: str
 
 class CustomerServiceInteraction(BaseModel):
     interactionId: str
     orderId: str
-    date: date
+    date: str = Field(
+        pattern=r'^\d{4}-\d{2}-\d{2}$',  # YYYY-MM-DD format
+        examples=['2024-03-20']
+    )
     description: str
 
 class CustomerData(BaseModel):
@@ -69,11 +77,9 @@ class CustomerSupportAIAgent:
         
         # Create namespaces
         self.ns = tpuf.Namespace('customer-support-agent')
-        
-        self.client = instructor.from_gemini(
-            client=genai.GenerativeModel(
-                model_name="models/gemini-1.5-flash-latest",
-            )
+        self.oai = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+        self.client = instructor.from_openai(
+            self.oai
         )
 
     def handle_query(self, query: str, user_id: Optional[str] = None) -> str:
@@ -130,16 +136,27 @@ class CustomerSupportAIAgent:
         
         return answer
     
-    def get_embeddings(self, text: str) -> List[float]:
-        """Get embeddings for a given text."""
+    def get_embeddings(self, text: Any) -> List[float]:
+        """Get embeddings for a given text.
+        
+        Args:
+            text: Can be a string or a Pydantic model that needs to be converted to string
+        """
         try:
-            response = self.client.embeddings.create(
-                model="models/embedding-001",
+            # Convert Pydantic models to JSON string
+            if hasattr(text, 'model_dump_json'):
+                text = text.model_dump_json()
+            elif not isinstance(text, str):
+                text = str(text)
+            
+            response = self.oai.embeddings.create(
+                model="text-embedding-3-small",
                 input=text
             )
         except Exception as e:
             print(f"Error getting embeddings: {e}")
             return None
+        
         
         return response.data[0].embedding
 
@@ -161,8 +178,9 @@ class CustomerSupportAIAgent:
         
         prompt = f"""Generate a detailed customer profile and order history for a TechGadgets.com customer with ID {user_id}.
             When generating the recent order, make it a high-end electronic device (placed on {order_date}, to be delivered by {expected_delivery})"""
-            
+                        
         customer_data = self.client.chat.completions.create(
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "You are a data generation AI that creates realistic customer profiles and order hitories"},
                 {"role": "user", "content": prompt}
@@ -170,18 +188,23 @@ class CustomerSupportAIAgent:
             response_model=CustomerData
         )
                 
-        #customer_data = response.choices[0].message.parsed
+        # First convert the Pydantic model to a dict
+        customer_data_dict = customer_data.model_dump()
         
-        print("customer_data", customer_data)
+        # Then convert to JSON string
+        customer_data_json = json.dumps(customer_data_dict)
+        
+        # Write to file for debugging
+        self.write_customer_data_to_file(customer_data_json, user_id)
         
         self.ns.upsert(
             ids=[f"{user_id}-{datetime.now().timestamp()}"],
             vectors=[self.get_embeddings(customer_data)],
             distance_metric="cosine_distance",
-            attributes={"customer_data": [customer_data], 
-                        "user_id": user_id, 
-                        "role": "assistant", 
-                        "timestamp": datetime.now().timestamp(),
+            attributes={"customer_data": [customer_data_json], 
+                        "user_id": [user_id], 
+                        "role": ["assistant"], 
+                        "timestamp": [datetime.now().timestamp()],
                         },
             schema={
                 'content': {
@@ -191,6 +214,37 @@ class CustomerSupportAIAgent:
             }
         )
  
+    def write_customer_data_to_file(self, customer_data_json: str, user_id: str):
+        """Write customer data JSON to a file for debugging/readability.
+        
+        Args:
+            customer_data_json: The JSON string to write
+            user_id: The user ID to include in the filename
+        """
+        import json
+        from datetime import datetime
+        
+        # Create a debug directory if it doesn't exist
+        debug_dir = "debug_output"
+        os.makedirs(debug_dir, exist_ok=True)
+        
+        # Create filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{debug_dir}/customer_data_{user_id}_{timestamp}.json"
+        
+        # Parse and re-write the JSON string to get pretty formatting
+        parsed_json = json.loads(customer_data_json)
+        
+        # Write the data with nice formatting
+        with open(filename, 'w') as f:
+            json.dump(
+                parsed_json,
+                f,
+                indent=2,  # Pretty print with 2-space indentation
+                default=str  # Handle date objects
+            )
+        
+        print(f"Wrote customer data JSON to {filename}")
 
 # Initialize the CustomerSupportAIAgent
 support_agent = CustomerSupportAIAgent()
